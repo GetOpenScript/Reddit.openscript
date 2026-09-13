@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Comments on YouTube
-// @version      1.0.1
-// @description  View Reddit discussion threads and comments directly above YouTube comments.
+// @version      1.0.2
+// @description  View Reddit discussion threads and comments in Old Reddit UI directly above YouTube comments.
 // @match        https://www.youtube.com/*
 // @run-at       document_idle
 // ==/UserScript==
@@ -13,6 +13,7 @@ const DESC_SELECTOR = '#description, #description-inline-expander, ytd-text-inli
 let currentVideoId = null;
 let activePostId = null;
 let cachedPosts = [];
+let currentSort = 'best';
 
 const ensureStyles = () => {
   if (document.getElementById(STYLE_ID)) return;
@@ -21,208 +22,348 @@ const ensureStyles = () => {
   style.textContent = `
     #${MOUNT_ID} {
       margin: 16px 0 24px;
-      font-family: Roboto, Arial, sans-serif;
-      color: var(--yt-spec-text-primary, #0f0f0f);
+      font-family: Verdana, Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      color: #222;
+    }
+    html[dark] #${MOUNT_ID} {
+      color: #d7dadc;
     }
     .os-tabs {
       display: flex;
-      gap: 8px;
+      list-style: none;
+      margin: 0;
+      padding: 0;
       overflow-x: auto;
-      padding: 4px 0 12px;
-      border-bottom: 1px solid var(--yt-spec-outline, rgba(0,0,0,0.1));
-      scrollbar-width: thin;
+      border-bottom: 1px solid #ddd;
+    }
+    html[dark] .os-tabs {
+      border-bottom-color: #383838;
     }
     .os-tab {
-      display: inline-flex;
+      background: #f1f1f1;
+      border: 1px solid #ddd;
+      border-bottom: none;
+      display: flex;
+      flex: 1;
+      min-width: 120px;
+      font-size: 12px;
+      justify-content: center;
       align-items: center;
-      gap: 6px;
       padding: 6px 12px;
-      border-radius: 16px;
-      border: 1px solid var(--yt-spec-outline, rgba(0,0,0,0.1));
-      background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.05));
-      color: var(--yt-spec-text-secondary, #606060);
       cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      white-space: nowrap;
-      transition: background 0.2s, border-color 0.2s;
+      color: #333;
+      user-select: none;
+      text-decoration: none;
+      margin-right: -1px;
+    }
+    html[dark] .os-tab {
+      background: #202020;
+      border-color: #383838;
+      color: #aaa;
     }
     .os-tab:hover {
-      background: var(--yt-spec-button-chip-background-hover, rgba(0,0,0,0.1));
+      background: #fff;
+    }
+    html[dark] .os-tab:hover {
+      background: #181818;
+      color: #eee;
     }
     .os-tab.os-active {
-      background: #ff4500;
+      background: #fff;
+      color: #000;
+      font-weight: bold;
+      border-bottom: 1px solid #fff;
+      margin-bottom: -1px;
+    }
+    html[dark] .os-tab.os-active {
+      background: #0f0f0f;
       color: #fff;
-      border-color: #ff4500;
+      border-bottom: 1px solid #0f0f0f;
     }
-    .os-tab .os-badge {
-      font-size: 10px;
-      padding: 1px 5px;
-      background: rgba(255,255,255,0.25);
-      border-radius: 8px;
+    .os-tab .os-count {
+      color: #888;
+      font-weight: normal;
+      margin-left: 4px;
     }
-    .os-tab:not(.os-active) .os-badge {
-      background: var(--yt-spec-outline, rgba(0,0,0,0.1));
-      color: var(--yt-spec-text-primary, #0f0f0f);
+    .os-tab.os-official {
+      color: #ff4500;
     }
-    .os-header {
+    .os-box {
+      border: 1px solid #ddd;
+      border-top: none;
+      padding: 12px 14px 16px;
+      background: #fff;
+    }
+    html[dark] .os-box {
+      border-color: #383838;
+      background: #0f0f0f;
+    }
+    .os-post-entry {
       display: flex;
-      justify-content: space-between;
       align-items: flex-start;
-      margin: 14px 0 12px;
-      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .os-post-score {
+      font-size: 15px;
+      font-weight: bold;
+      color: #555;
+      min-width: 32px;
+      padding-top: 1px;
+      text-align: center;
+      margin-right: 8px;
+    }
+    html[dark] .os-post-score {
+      color: #aaa;
+    }
+    .os-post-main {
+      flex: 1;
     }
     .os-post-title {
       font-size: 15px;
-      font-weight: 600;
-      line-height: 1.4;
-      color: var(--yt-spec-text-primary, #0f0f0f);
+      color: #0000ff;
       text-decoration: none;
+      line-height: 1.35;
+      font-weight: normal;
+    }
+    html[dark] .os-post-title {
+      color: #4f9feb;
     }
     .os-post-title:hover {
       text-decoration: underline;
     }
-    .os-post-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 4px;
-      font-size: 12px;
-      color: var(--yt-spec-text-secondary, #606060);
-    }
-    .os-official-tag {
-      background: #0079d3;
-      color: #fff;
+    .os-post-tagline {
       font-size: 10px;
-      font-weight: 600;
-      padding: 2px 6px;
-      border-radius: 4px;
+      color: #888;
+      margin: 4px 0;
     }
-    .os-comment-list {
+    .os-post-tagline a {
+      color: #369;
+      text-decoration: none;
+    }
+    html[dark] .os-post-tagline a {
+      color: #2693e6;
+    }
+    .os-post-tagline a:hover {
+      text-decoration: underline;
+    }
+    .os-actions {
       display: flex;
-      flex-direction: column;
-      gap: 12px;
+      gap: 8px;
+      font-size: 10px;
+      font-weight: bold;
+      color: #888;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .os-actions a {
+      color: #888;
+      text-decoration: none;
+    }
+    .os-actions a:hover {
+      text-decoration: underline;
+    }
+    .os-sort-bar {
+      font-size: 11px;
+      color: #333;
+      margin: 10px 0 12px 40px;
+    }
+    html[dark] .os-sort-bar {
+      color: #aaa;
+    }
+    .os-sort-bar select {
+      font-size: 11px;
+      margin-left: 4px;
+      background: inherit;
+      color: inherit;
+      border: 1px solid #ccc;
+      border-radius: 2px;
+      padding: 1px 3px;
+    }
+    html[dark] .os-sort-bar select {
+      border-color: #555;
+      background: #222;
+    }
+    .os-comment-tree {
+      margin-left: 10px;
     }
     .os-comment {
-      font-size: 13px;
-      line-height: 1.5;
+      margin-top: 10px;
     }
-    .os-comment-tagline {
+    .os-tagline {
+      font-size: 10px;
+      color: #888;
       display: flex;
       align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: var(--yt-spec-text-secondary, #606060);
+      gap: 4px;
+      flex-wrap: wrap;
       margin-bottom: 4px;
     }
     .os-collapse {
+      color: #369;
       background: none;
       border: none;
-      color: var(--yt-spec-text-secondary, #606060);
       cursor: pointer;
       font-family: monospace;
-      font-size: 12px;
-      padding: 0 4px;
+      font-size: 11px;
+      padding: 0 2px;
+      font-weight: bold;
+    }
+    html[dark] .os-collapse {
+      color: #2693e6;
     }
     .os-author {
-      font-weight: 600;
-      color: var(--yt-spec-text-primary, #0f0f0f);
+      font-weight: bold;
+      color: #369;
       text-decoration: none;
     }
+    html[dark] .os-author {
+      color: #2693e6;
+    }
+    .os-author:hover {
+      text-decoration: underline;
+    }
     .os-author.os-op {
-      color: #0079d3;
+      color: #0055df;
+    }
+    .os-op-tag {
+      color: #0055df;
+      font-weight: bold;
+      font-size: 10px;
+      margin-left: 2px;
+    }
+    html[dark] .os-op-tag, html[dark] .os-author.os-op {
+      color: #5296dd;
+    }
+    .os-flair {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 2px;
+      color: #555;
+      font-size: 9px;
+      padding: 0 3px;
+    }
+    html[dark] .os-flair {
+      background: #282828;
+      border-color: #4a4a4a;
+      color: #ccc;
     }
     .os-score {
-      font-weight: 500;
+      font-weight: bold;
+      color: #888;
+    }
+    .os-time {
+      color: #aaa;
     }
     .os-body {
-      color: var(--yt-spec-text-primary, #0f0f0f);
+      color: #222;
+      font-size: 13px;
+      line-height: 1.45;
+      margin-left: 18px;
       word-break: break-word;
       overflow-wrap: anywhere;
     }
+    html[dark] .os-body {
+      color: #d7dadc;
+    }
     .os-body p { margin: 4px 0; }
-    .os-body a { color: var(--yt-spec-brand-link-text, #065fd4); text-decoration: none; }
+    .os-body a { color: #0079d3; text-decoration: none; }
+    html[dark] .os-body a { color: #4f9feb; }
     .os-body a:hover { text-decoration: underline; }
     .os-body blockquote {
-      margin: 4px 0;
+      border-left: 2px solid #c5c1ad;
+      margin: 4px 0 4px 4px;
       padding-left: 8px;
-      border-left: 3px solid var(--yt-spec-outline, rgba(0,0,0,0.2));
-      color: var(--yt-spec-text-secondary, #606060);
+      color: #555;
+    }
+    html[dark] .os-body blockquote {
+      border-left-color: #666;
+      color: #999;
     }
     .os-body pre, .os-body code {
-      background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.05));
-      border-radius: 4px;
-      font-size: 12px;
-      padding: 2px 4px;
+      background: #f8f8f8;
+      border: 1px solid #e5e5e5;
+      border-radius: 2px;
+      font-size: 11px;
+      padding: 1px 3px;
     }
-    .os-replies {
-      margin-left: 12px;
-      padding-left: 12px;
-      border-left: 2px solid var(--yt-spec-outline, rgba(0,0,0,0.1));
+    html[dark] .os-body pre, html[dark] .os-body code {
+      background: #1c1c1c;
+      border-color: #333;
+    }
+    .os-comment-actions {
+      margin: 2px 0 6px 18px;
       display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-top: 8px;
+      gap: 8px;
+      font-size: 10px;
+      font-weight: bold;
+      color: #888;
+    }
+    .os-comment-actions a {
+      color: #888;
+      text-decoration: none;
+    }
+    .os-comment-actions a:hover {
+      text-decoration: underline;
+    }
+    .os-children {
+      border-left: 1px dotted #ddf;
+      margin-left: 14px;
+      padding-left: 6px;
+    }
+    html[dark] .os-children {
+      border-left-color: #3a3a3a;
     }
     .os-collapsed > .os-body,
-    .os-collapsed > .os-replies,
-    .os-collapsed > .os-load-more {
+    .os-collapsed > .os-comment-actions,
+    .os-collapsed > .os-children {
       display: none !important;
+    }
+    .os-collapsed .os-tagline {
+      font-style: italic;
     }
     .os-load-more {
       background: none;
-      border: 1px solid var(--yt-spec-outline, rgba(0,0,0,0.1));
-      border-radius: 12px;
-      padding: 4px 10px;
-      color: var(--yt-spec-brand-link-text, #065fd4);
-      font-size: 12px;
+      border: none;
+      color: #369;
+      font-weight: bold;
+      font-size: 11px;
       cursor: pointer;
-      margin-top: 6px;
-      align-self: flex-start;
+      margin: 8px 0 8px 18px;
+      padding: 0;
+      display: block;
+    }
+    html[dark] .os-load-more {
+      color: #2693e6;
     }
     .os-load-more:hover {
-      background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.05));
+      text-decoration: underline;
     }
     .os-status {
-      padding: 10px 14px;
-      font-size: 13px;
-      border-radius: 8px;
-      background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.04));
-      color: var(--yt-spec-text-secondary, #606060);
-      margin-bottom: 8px;
-    }
-    .os-retry-btn {
-      margin-left: 8px;
-      color: var(--yt-spec-brand-link-text, #065fd4);
-      background: none;
-      border: none;
-      cursor: pointer;
-      font-size: 13px;
-      text-decoration: underline;
+      padding: 10px;
+      color: #888;
+      font-style: italic;
     }
   `;
   document.head.append(style);
 };
 
-const formatScore = n => {
-  if (typeof n !== 'number') return '0';
-  if (Math.abs(n) >= 1e4) return `${(n / 1e3).toFixed(1)}k`;
-  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-  return String(n);
-};
+const formatScore = n => (typeof n === 'number' ? n.toLocaleString() : '0');
 
 const timeAgo = utc => {
   const s = Math.max(0, Math.floor(Date.now() / 1e3 - utc));
-  if (s < 60) return `${s}s ago`;
+  if (s < 60) return `${s} seconds ago`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
+  if (d < 30) return `${d} day${d === 1 ? '' : 's'} ago`;
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
-  return `${Math.floor(mo / 12)}y ago`;
+  if (mo < 12) return `${mo} month${mo === 1 ? '' : 's'} ago`;
+  const y = Math.floor(mo / 12);
+  return `${y} year${y === 1 ? '' : 's'} ago`;
 };
 
 const decodeHtml = str => {
@@ -287,9 +428,9 @@ const waitForMount = async (maxAttempts = 40) => {
   return null;
 };
 
-const renderComments = (children, postAuthor) => {
+const renderComments = (children, postAuthor, permalink) => {
   const container = document.createElement('div');
-  container.className = 'os-comment-list';
+  container.className = 'os-comment-tree';
 
   for (const child of children) {
     if (child.kind === 'more') {
@@ -297,66 +438,107 @@ const renderComments = (children, postAuthor) => {
       if (!moreIds?.length) continue;
       const btn = document.createElement('button');
       btn.className = 'os-load-more';
-      btn.textContent = `Load more comments (${count || moreIds.length})`;
+      btn.textContent = `load more comments (${count || moreIds.length})`;
       btn.onclick = async () => {
         btn.disabled = true;
-        btn.textContent = 'Loading...';
+        btn.textContent = 'loading...';
         try {
           const res = await OpenScript.fetch(
-            `https://www.reddit.com/api/morechildren.json?api_type=json&link_id=${activePostId}&children=${moreIds.slice(0, 20).join(',')}&sort=best`
+            `https://www.reddit.com/api/morechildren.json?api_type=json&link_id=${activePostId}&children=${moreIds.slice(0, 20).join(',')}&sort=${currentSort}`
           );
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
           const items = json?.json?.data?.things?.map(t => t.data) || [];
-          btn.replaceWith(renderFlatComments(items, postAuthor));
+          btn.replaceWith(renderFlatComments(items, postAuthor, permalink));
         } catch {
-          btn.textContent = 'Failed to load comments';
+          btn.textContent = 'failed to load comments';
         }
       };
       container.append(btn);
       continue;
     }
 
-    const { id, author, score, created_utc, body_html, replies } = child.data;
+    const { id, author, score, created_utc, body_html, replies, author_flair_text } = child.data;
     if (!body_html) continue;
+
+    const isDeleted = author === '[deleted]';
+    const isOp = author === postAuthor;
 
     const el = document.createElement('div');
     el.className = 'os-comment';
     el.id = `os-c-${id}`;
 
     const tagline = document.createElement('div');
-    tagline.className = 'os-comment-tagline';
+    tagline.className = 'os-tagline';
 
     const toggle = document.createElement('button');
     toggle.className = 'os-collapse';
-    toggle.textContent = '[–]';
+    toggle.textContent = '[-]';
     toggle.onclick = () => {
       const isCol = el.classList.toggle('os-collapsed');
-      toggle.textContent = isCol ? '[+]' : '[–]';
+      toggle.textContent = isCol ? '[+]' : '[-]';
     };
 
-    const authorLink = document.createElement('a');
-    authorLink.className = `os-author${author === postAuthor ? ' os-op' : ''}`;
-    authorLink.href = `https://www.reddit.com/u/${author}`;
-    authorLink.target = '_blank';
-    authorLink.rel = 'noopener noreferrer';
-    authorLink.textContent = author;
+    tagline.append(toggle);
 
-    const metaSpan = document.createElement('span');
-    metaSpan.className = 'os-score';
-    metaSpan.textContent = `• ${formatScore(score)} points • ${timeAgo(created_utc)}`;
+    if (isDeleted) {
+      const del = document.createElement('span');
+      del.className = 'os-author';
+      del.textContent = '[deleted]';
+      tagline.append(del);
+    } else {
+      const authorLink = document.createElement('a');
+      authorLink.className = `os-author${isOp ? ' os-op' : ''}`;
+      authorLink.href = `https://www.reddit.com/u/${author}`;
+      authorLink.target = '_blank';
+      authorLink.rel = 'noopener noreferrer';
+      authorLink.textContent = author;
+      tagline.append(authorLink);
 
-    tagline.append(toggle, authorLink, metaSpan);
+      if (isOp) {
+        const opTag = document.createElement('span');
+        opTag.className = 'os-op-tag';
+        opTag.textContent = '[S]';
+        tagline.append(opTag);
+      }
+    }
+
+    if (author_flair_text) {
+      const flair = document.createElement('span');
+      flair.className = 'os-flair';
+      flair.textContent = decodeHtml(author_flair_text);
+      tagline.append(flair);
+    }
+
+    const meta = document.createElement('span');
+    meta.className = 'os-score';
+    const ptText = Math.abs(score) === 1 ? 'point' : 'points';
+    meta.textContent = `${score} ${ptText}`;
+
+    const time = document.createElement('span');
+    time.className = 'os-time';
+    time.textContent = timeAgo(created_utc);
+
+    tagline.append(meta, time);
 
     const body = document.createElement('div');
     body.className = 'os-body';
     body.innerHTML = sanitizeHtml(body_html);
 
-    el.append(tagline, body);
+    const actions = document.createElement('div');
+    actions.className = 'os-comment-actions';
+    const permLink = document.createElement('a');
+    permLink.href = `https://www.reddit.com${permalink}${id}`;
+    permLink.target = '_blank';
+    permLink.rel = 'noopener noreferrer';
+    permLink.textContent = 'permalink';
+    actions.append(permLink);
+
+    el.append(tagline, body, actions);
 
     if (replies?.data?.children?.length) {
-      const sub = renderComments(replies.data.children, postAuthor);
-      sub.className = 'os-replies';
+      const sub = renderComments(replies.data.children, postAuthor, permalink);
+      sub.className = 'os-children';
       el.append(sub);
     }
 
@@ -366,71 +548,112 @@ const renderComments = (children, postAuthor) => {
   return container;
 };
 
-const renderFlatComments = (items, postAuthor) => {
+const renderFlatComments = (items, postAuthor, permalink) => {
   const wrap = document.createDocumentFragment();
   for (const item of items) {
     if (!item.body_html) continue;
+    const isOp = item.author === postAuthor;
+    const isDeleted = item.author === '[deleted]';
+
     const el = document.createElement('div');
     el.className = 'os-comment';
 
     const tagline = document.createElement('div');
-    tagline.className = 'os-comment-tagline';
+    tagline.className = 'os-tagline';
 
-    const authorLink = document.createElement('a');
-    authorLink.className = `os-author${item.author === postAuthor ? ' os-op' : ''}`;
-    authorLink.href = `https://www.reddit.com/u/${item.author}`;
-    authorLink.target = '_blank';
-    authorLink.rel = 'noopener noreferrer';
-    authorLink.textContent = item.author;
+    const toggle = document.createElement('button');
+    toggle.className = 'os-collapse';
+    toggle.textContent = '[-]';
+    toggle.onclick = () => {
+      const isCol = el.classList.toggle('os-collapsed');
+      toggle.textContent = isCol ? '[+]' : '[-]';
+    };
+    tagline.append(toggle);
+
+    if (isDeleted) {
+      const del = document.createElement('span');
+      del.className = 'os-author';
+      del.textContent = '[deleted]';
+      tagline.append(del);
+    } else {
+      const authorLink = document.createElement('a');
+      authorLink.className = `os-author${isOp ? ' os-op' : ''}`;
+      authorLink.href = `https://www.reddit.com/u/${item.author}`;
+      authorLink.target = '_blank';
+      authorLink.rel = 'noopener noreferrer';
+      authorLink.textContent = item.author;
+      tagline.append(authorLink);
+
+      if (isOp) {
+        const opTag = document.createElement('span');
+        opTag.className = 'os-op-tag';
+        opTag.textContent = '[S]';
+        tagline.append(opTag);
+      }
+    }
 
     const meta = document.createElement('span');
     meta.className = 'os-score';
-    meta.textContent = `• ${formatScore(item.score)} points • ${timeAgo(item.created_utc)}`;
+    const ptText = Math.abs(item.score) === 1 ? 'point' : 'points';
+    meta.textContent = `${item.score} ${ptText}`;
 
-    tagline.append(authorLink, meta);
+    const time = document.createElement('span');
+    time.className = 'os-time';
+    time.textContent = timeAgo(item.created_utc);
+
+    tagline.append(meta, time);
 
     const body = document.createElement('div');
     body.className = 'os-body';
     body.innerHTML = sanitizeHtml(item.body_html);
 
-    el.append(tagline, body);
+    const actions = document.createElement('div');
+    actions.className = 'os-comment-actions';
+    const permLink = document.createElement('a');
+    permLink.href = `https://www.reddit.com${permalink}${item.id}`;
+    permLink.target = '_blank';
+    permLink.rel = 'noopener noreferrer';
+    permLink.textContent = 'permalink';
+    actions.append(permLink);
+
+    el.append(tagline, body, actions);
     wrap.append(el);
   }
   return wrap;
 };
 
-const loadPostComments = async (post, postContainer) => {
-  postContainer.innerHTML = '<div class="os-status">Loading Reddit comments...</div>';
+const loadPostComments = async (post, container) => {
+  container.innerHTML = '<div class="os-status">loading comments...</div>';
   try {
-    const res = await OpenScript.fetch(`https://www.reddit.com/comments/${post.id}.json?sort=best`);
+    const res = await OpenScript.fetch(`https://www.reddit.com/comments/${post.id}.json?sort=${currentSort}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const [, commentsData] = await res.json();
     const children = commentsData?.data?.children || [];
 
-    postContainer.innerHTML = '';
+    container.innerHTML = '';
     if (!children.length) {
-      postContainer.innerHTML = '<div class="os-status">No comments in this thread yet.</div>';
+      container.innerHTML = '<div class="os-status">no comments (yet)</div>';
       return;
     }
-    postContainer.append(renderComments(children, post.author));
+    container.append(renderComments(children, post.author, post.permalink));
   } catch (err) {
-    postContainer.innerHTML = `<div class="os-status">Unable to load Reddit comments (${err.message}).</div>`;
+    container.innerHTML = `<div class="os-status">unable to load comments (${err.message}).</div>`;
   }
 };
 
-const renderThread = (post, mount) => {
-  let contentArea = mount.querySelector('.os-content-area');
-  if (!contentArea) {
-    contentArea = document.createElement('div');
-    contentArea.className = 'os-content-area';
-    mount.append(contentArea);
-  }
-  contentArea.innerHTML = '';
+const renderThread = (post, box) => {
+  box.innerHTML = '';
 
-  const header = document.createElement('div');
-  header.className = 'os-header';
+  const entry = document.createElement('div');
+  entry.className = 'os-post-entry';
 
-  const left = document.createElement('div');
+  const scoreDiv = document.createElement('div');
+  scoreDiv.className = 'os-post-score';
+  scoreDiv.textContent = post.score;
+
+  const mainDiv = document.createElement('div');
+  mainDiv.className = 'os-post-main';
+
   const title = document.createElement('a');
   title.className = 'os-post-title';
   title.href = `https://www.reddit.com${post.permalink}`;
@@ -438,19 +661,54 @@ const renderThread = (post, mount) => {
   title.rel = 'noopener noreferrer';
   title.textContent = decodeHtml(post.title);
 
-  const meta = document.createElement('div');
-  meta.className = 'os-post-meta';
-  meta.textContent = `r/${post.subreddit} • Posted by u/${post.author} ${timeAgo(post.created_utc)} • ${formatScore(post.score)} points`;
+  const tagline = document.createElement('div');
+  tagline.className = 'os-post-tagline';
+  tagline.innerHTML = `
+    submitted ${timeAgo(post.created_utc)} by
+    <a href="https://www.reddit.com/u/${post.author}" target="_blank" rel="noopener noreferrer">${post.author}</a>
+    to <a href="https://www.reddit.com/r/${post.subreddit}" target="_blank" rel="noopener noreferrer">r/${post.subreddit}</a>
+  `;
 
-  left.append(title, meta);
-  header.append(left);
-  contentArea.append(header);
+  const actions = document.createElement('ul');
+  actions.className = 'os-actions';
+  const permLi = document.createElement('li');
+  const permA = document.createElement('a');
+  permA.href = `https://www.reddit.com${post.permalink}`;
+  permA.target = '_blank';
+  permA.rel = 'noopener noreferrer';
+  permA.textContent = `${post.num_comments} comments`;
+  permLi.append(permA);
+  actions.append(permLi);
 
-  const commentsArea = document.createElement('div');
-  commentsArea.className = 'os-comments-area';
-  contentArea.append(commentsArea);
+  mainDiv.append(title, tagline, actions);
+  entry.append(scoreDiv, mainDiv);
+  box.append(entry);
 
-  loadPostComments(post, commentsArea);
+  const sortBar = document.createElement('div');
+  sortBar.className = 'os-sort-bar';
+  sortBar.innerHTML = `
+    sorted by:
+    <select>
+      <option value="best">best</option>
+      <option value="top">top</option>
+      <option value="new">new</option>
+      <option value="controversial">controversial</option>
+      <option value="old">old</option>
+      <option value="qa">q&a</option>
+    </select>
+  `;
+  const select = sortBar.querySelector('select');
+  select.value = currentSort;
+  select.onchange = e => {
+    currentSort = e.target.value;
+    loadPostComments(post, commentsContainer);
+  };
+  box.append(sortBar);
+
+  const commentsContainer = document.createElement('div');
+  box.append(commentsContainer);
+
+  loadPostComments(post, commentsContainer);
 };
 
 const renderTabs = (posts, mount) => {
@@ -464,39 +722,31 @@ const renderTabs = (posts, mount) => {
   tabs.className = 'os-tabs';
   mount.append(tabs);
 
+  const box = document.createElement('div');
+  box.className = 'os-box';
+  mount.append(box);
+
   const activePost = posts.find(p => p.name === activePostId) || posts[0];
   activePostId = activePost.name;
 
   posts.forEach(post => {
     const isOfficial = officialSub && post.subreddit.toLowerCase() === officialSub;
     const tab = document.createElement('div');
-    tab.className = `os-tab${post.name === activePostId ? ' os-active' : ''}`;
-    tab.textContent = `r/${post.subreddit}`;
-
-    if (isOfficial) {
-      const off = document.createElement('span');
-      off.className = 'os-official-tag';
-      off.textContent = 'Official';
-      tab.append(off);
-    }
-
-    const badge = document.createElement('span');
-    badge.className = 'os-badge';
-    badge.textContent = `${formatScore(post.score)} ↑ • ${post.num_comments} 💬`;
-    tab.append(badge);
+    tab.className = `os-tab${post.name === activePostId ? ' os-active' : ''}${isOfficial ? ' os-official' : ''}`;
+    tab.innerHTML = `${post.subreddit} <span class="os-count">(${post.num_comments})</span>`;
 
     tab.onclick = () => {
       if (activePostId === post.name) return;
       activePostId = post.name;
       tabs.querySelectorAll('.os-tab').forEach(t => t.classList.remove('os-active'));
       tab.classList.add('os-active');
-      renderThread(post, mount);
+      renderThread(post, box);
     };
 
     tabs.append(tab);
   });
 
-  renderThread(activePost, mount);
+  renderThread(activePost, box);
 };
 
 const updateForVideo = async videoId => {
@@ -506,7 +756,7 @@ const updateForVideo = async videoId => {
 
   const initialMount = getMount();
   if (initialMount) {
-    initialMount.innerHTML = '<div class="os-status">Searching Reddit for discussion threads...</div>';
+    initialMount.innerHTML = '<div class="os-box"><div class="os-status">searching reddit...</div></div>';
   }
 
   try {
@@ -523,7 +773,7 @@ const updateForVideo = async videoId => {
     if (!mount || videoId !== currentVideoId) return;
 
     if (!posts.length) {
-      mount.innerHTML = '<div class="os-status">No Reddit discussions found for this video.</div>';
+      mount.innerHTML = '';
       return;
     }
 
@@ -532,13 +782,7 @@ const updateForVideo = async videoId => {
   } catch (err) {
     const mount = await waitForMount();
     if (mount && videoId === currentVideoId) {
-      mount.innerHTML = `
-        <div class="os-status">
-          Could not search Reddit (${err.message}).
-          <button class="os-retry-btn">Retry</button>
-        </div>
-      `;
-      mount.querySelector('.os-retry-btn')?.addEventListener('click', () => updateForVideo(videoId));
+      mount.innerHTML = `<div class="os-box"><div class="os-status">could not search reddit (${err.message})</div></div>`;
     }
   }
 };
