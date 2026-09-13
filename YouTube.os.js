@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Reddit Comments on YouTube
-// @version      1.0.0
+// @version      1.0.1
 // @description  View Reddit discussion threads and comments directly above YouTube comments.
 // @match        https://www.youtube.com/*
 // @run-at       document_idle
@@ -8,13 +8,11 @@
 
 const MOUNT_ID = 'os-reddit-mount';
 const STYLE_ID = 'os-reddit-style';
-const COMMENTS_SELECTOR = '#comments';
 const DESC_SELECTOR = '#description, #description-inline-expander, ytd-text-inline-expander';
 
 let currentVideoId = null;
 let activePostId = null;
 let cachedPosts = [];
-let abortController = null;
 
 const ensureStyles = () => {
   if (document.getElementById(STYLE_ID)) return;
@@ -22,7 +20,7 @@ const ensureStyles = () => {
   style.id = STYLE_ID;
   style.textContent = `
     #${MOUNT_ID} {
-      margin-bottom: 24px;
+      margin: 16px 0 24px;
       font-family: Roboto, Arial, sans-serif;
       color: var(--yt-spec-text-primary, #0f0f0f);
     }
@@ -109,9 +107,6 @@ const ensureStyles = () => {
       font-size: 13px;
       line-height: 1.5;
     }
-    .os-comment-inner {
-      padding: 4px 0;
-    }
     .os-comment-tagline {
       display: flex;
       align-items: center;
@@ -189,10 +184,21 @@ const ensureStyles = () => {
       background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.05));
     }
     .os-status {
-      padding: 12px 0;
+      padding: 10px 14px;
       font-size: 13px;
+      border-radius: 8px;
+      background: var(--yt-spec-badge-chip-background, rgba(0,0,0,0.04));
       color: var(--yt-spec-text-secondary, #606060);
-      font-style: italic;
+      margin-bottom: 8px;
+    }
+    .os-retry-btn {
+      margin-left: 8px;
+      color: var(--yt-spec-brand-link-text, #065fd4);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      text-decoration: underline;
     }
   `;
   document.head.append(style);
@@ -221,7 +227,7 @@ const timeAgo = utc => {
 
 const decodeHtml = str => {
   const txt = document.createElement('textarea');
-  txt.innerHTML = str;
+  txt.innerHTML = str || '';
   return txt.value;
 };
 
@@ -243,13 +249,42 @@ const getOfficialSub = () => {
 
 const getMount = () => {
   let mount = document.getElementById(MOUNT_ID);
-  if (mount) return mount;
-  const target = document.querySelector(COMMENTS_SELECTOR);
-  if (!target || !target.parentNode) return null;
-  mount = document.createElement('div');
-  mount.id = MOUNT_ID;
-  target.parentNode.insertBefore(mount, target);
-  return mount;
+  if (mount && mount.isConnected) return mount;
+
+  const comments = document.querySelector('#comments, ytd-comments');
+  if (comments && comments.parentNode) {
+    mount = document.createElement('div');
+    mount.id = MOUNT_ID;
+    comments.parentNode.insertBefore(mount, comments);
+    return mount;
+  }
+
+  const meta = document.querySelector('#below > ytd-watch-metadata, #below > #watch-metadata');
+  if (meta && meta.parentNode) {
+    mount = document.createElement('div');
+    mount.id = MOUNT_ID;
+    meta.parentNode.insertBefore(mount, meta.nextSibling);
+    return mount;
+  }
+
+  const below = document.querySelector('#below');
+  if (below) {
+    mount = document.createElement('div');
+    mount.id = MOUNT_ID;
+    below.append(mount);
+    return mount;
+  }
+
+  return null;
+};
+
+const waitForMount = async (maxAttempts = 40) => {
+  for (let i = 0; i < maxAttempts; i++) {
+    const m = getMount();
+    if (m) return m;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return null;
 };
 
 const renderComments = (children, postAuthor) => {
@@ -258,7 +293,7 @@ const renderComments = (children, postAuthor) => {
 
   for (const child of children) {
     if (child.kind === 'more') {
-      const { count, children: moreIds, id, parent_id } = child.data;
+      const { count, children: moreIds } = child.data;
       if (!moreIds?.length) continue;
       const btn = document.createElement('button');
       btn.className = 'os-load-more';
@@ -273,8 +308,7 @@ const renderComments = (children, postAuthor) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
           const items = json?.json?.data?.things?.map(t => t.data) || [];
-          const rendered = renderFlatComments(items, postAuthor);
-          btn.replaceWith(rendered);
+          btn.replaceWith(renderFlatComments(items, postAuthor));
         } catch {
           btn.textContent = 'Failed to load comments';
         }
@@ -384,10 +418,7 @@ const loadPostComments = async (post, postContainer) => {
   }
 };
 
-const renderThread = post => {
-  const mount = getMount();
-  if (!mount) return;
-
+const renderThread = (post, mount) => {
   let contentArea = mount.querySelector('.os-content-area');
   if (!contentArea) {
     contentArea = document.createElement('div');
@@ -422,22 +453,16 @@ const renderThread = post => {
   loadPostComments(post, commentsArea);
 };
 
-const renderTabs = posts => {
-  const mount = getMount();
-  if (!mount) return;
-
+const renderTabs = (posts, mount) => {
+  mount.innerHTML = '';
   const officialSub = getOfficialSub();
   if (officialSub) {
     posts.sort((a, b) => (a.subreddit.toLowerCase() === officialSub ? -1 : b.subreddit.toLowerCase() === officialSub ? 1 : 0));
   }
 
-  let tabs = mount.querySelector('.os-tabs');
-  if (!tabs) {
-    tabs = document.createElement('div');
-    tabs.className = 'os-tabs';
-    mount.prepend(tabs);
-  }
-  tabs.innerHTML = '';
+  const tabs = document.createElement('div');
+  tabs.className = 'os-tabs';
+  mount.append(tabs);
 
   const activePost = posts.find(p => p.name === activePostId) || posts[0];
   activePostId = activePost.name;
@@ -465,22 +490,24 @@ const renderTabs = posts => {
       activePostId = post.name;
       tabs.querySelectorAll('.os-tab').forEach(t => t.classList.remove('os-active'));
       tab.classList.add('os-active');
-      renderThread(post);
+      renderThread(post, mount);
     };
 
     tabs.append(tab);
   });
 
-  renderThread(activePost);
+  renderThread(activePost, mount);
 };
 
 const updateForVideo = async videoId => {
   ensureStyles();
-  const mount = getMount();
-  if (!mount) return;
-
-  mount.innerHTML = '<div class="os-status">Searching Reddit for discussion threads...</div>';
   cachedPosts = [];
+  activePostId = null;
+
+  const initialMount = getMount();
+  if (initialMount) {
+    initialMount.innerHTML = '<div class="os-status">Searching Reddit for discussion threads...</div>';
+  }
 
   try {
     const res = await OpenScript.fetch(
@@ -490,20 +517,41 @@ const updateForVideo = async videoId => {
     const data = await res.json();
     const posts = data?.data?.children?.map(c => c.data) || [];
 
+    if (videoId !== currentVideoId) return;
+
+    const mount = await waitForMount();
+    if (!mount || videoId !== currentVideoId) return;
+
     if (!posts.length) {
-      mount.innerHTML = '';
+      mount.innerHTML = '<div class="os-status">No Reddit discussions found for this video.</div>';
       return;
     }
 
     cachedPosts = posts;
-    renderTabs(posts);
+    renderTabs(posts, mount);
   } catch (err) {
-    mount.innerHTML = `<div class="os-status">Could not search Reddit (${err.message}).</div>`;
+    const mount = await waitForMount();
+    if (mount && videoId === currentVideoId) {
+      mount.innerHTML = `
+        <div class="os-status">
+          Could not search Reddit (${err.message}).
+          <button class="os-retry-btn">Retry</button>
+        </div>
+      `;
+      mount.querySelector('.os-retry-btn')?.addEventListener('click', () => updateForVideo(videoId));
+    }
   }
 };
 
+const getVideoId = () => {
+  const search = new URLSearchParams(location.search);
+  if (search.get('v')) return search.get('v');
+  const match = location.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+};
+
 const check = () => {
-  const id = new URLSearchParams(location.search).get('v');
+  const id = getVideoId();
   if (!id) {
     currentVideoId = null;
     const mount = document.getElementById(MOUNT_ID);
@@ -512,15 +560,15 @@ const check = () => {
   }
   if (id === currentVideoId) {
     if (cachedPosts.length && !document.getElementById(MOUNT_ID)?.hasChildNodes()) {
-      renderTabs(cachedPosts);
+      const mount = getMount();
+      if (mount) renderTabs(cachedPosts, mount);
     }
     return;
   }
   currentVideoId = id;
-  activePostId = null;
   updateForVideo(id);
 };
 
 document.addEventListener('yt-navigate-finish', check);
-setInterval(check, 1200);
+setInterval(check, 1000);
 check();
