@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Reddit Comments on YouTube
-// @version      1.0.2
+// @version      1.0.3
 // @description  View Reddit discussion threads and comments in Old Reddit UI directly above YouTube comments.
 // @match        https://www.youtube.com/*
 // @run-at       document_idle
@@ -20,6 +20,9 @@ const ensureStyles = () => {
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
+    #${MOUNT_ID}, #${MOUNT_ID} * {
+      box-sizing: border-box;
+    }
     #${MOUNT_ID} {
       margin: 16px 0 24px;
       font-family: Verdana, Arial, Helvetica, sans-serif;
@@ -35,18 +38,22 @@ const ensureStyles = () => {
       margin: 0;
       padding: 0;
       overflow-x: auto;
-      border-bottom: 1px solid #ddd;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      position: relative;
+      z-index: 2;
     }
-    html[dark] .os-tabs {
-      border-bottom-color: #383838;
+    .os-tabs::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0;
     }
     .os-tab {
       background: #f1f1f1;
       border: 1px solid #ddd;
-      border-bottom: none;
       display: flex;
-      flex: 1;
-      min-width: 120px;
+      flex: 1 1 0;
       font-size: 12px;
       justify-content: center;
       align-items: center;
@@ -55,7 +62,9 @@ const ensureStyles = () => {
       color: #333;
       user-select: none;
       text-decoration: none;
-      margin-right: -1px;
+    }
+    .os-tab:not(:first-child) {
+      border-left: none;
     }
     html[dark] .os-tab {
       background: #202020;
@@ -73,13 +82,12 @@ const ensureStyles = () => {
       background: #fff;
       color: #000;
       font-weight: bold;
-      border-bottom: 1px solid #fff;
-      margin-bottom: -1px;
+      border-bottom-color: #fff;
     }
     html[dark] .os-tab.os-active {
       background: #0f0f0f;
       color: #fff;
-      border-bottom: 1px solid #0f0f0f;
+      border-bottom-color: #0f0f0f;
     }
     .os-tab .os-count {
       color: #888;
